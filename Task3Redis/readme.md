@@ -116,3 +116,88 @@ print(f'sismember-time: {(finish - start) * 1000: .2f} ms')
 
 - All operations executed very fast if we compare with Postgres or Mongo. It is expected as Redis is an in-memory database. The advantage of storing data in memory(not disk) is that the representation of complex data structures is simpler tham om disk and it is easier to process them.
 
+### Now let's set up redis cluster on 3 nodes
+
+Create file __redis.conf__ with next content
+```
+port 8000
+cluster-enabled yes
+cluster-config-file nodes.conf
+cluster-node-timeout 5000
+appendonly yes
+```
+
+- __cluster-enabled yes__ - tells redis that cluster configuration is enabled
+- __cluster-config-file nodes.conf__ - standart configuration file for clustering
+- __cluster-node-timeout__ - 5000 ms until node is considered to be failed
+- __appendonly yes__ - enter data to this node
+
+Then we create 3 directories with names __8000, 8001, 8002__ and copy the reids.confg file to each directory. Then in each configurational file change port number matching to the directory name. Run redis-server in each directory using 3 shell windows using command
+
+- `redis-server ./redis.conf`
+
+We can observe such output
+
+![plot](./screenshots/source6.png)
+
+Next we need to connect that nodes in one cluster. Run next command in new shell window
+
+`redis-cli --cluster create 127.0.0.1:8000 127.0.0.1:8001 127.0.0.1:8002 --cluster-replicas 0`
+
+The option __cluster-repicas 1__ means that for every node will be primary(master).
+
+After running command above, we check the configuration in the output and type `yes`
+
+![plot](./screenshots/source7.png)
+
+Connect to one of the nodes using
+
+- `redis-cli -p 8000 -c` Then use `CLUSTER SLOTS` and `CLUSTER INFO` to get information about cluster
+
+![plot](./screenshots/source8.png)
+
+Now we need to store some data in our cluster, but we __CAN't__ use our redis python client for such operations.
+In order interact correctly install `redis-py-cluster` package for python, it also needs `setuptools` package
+
+- `pip3 install redis-py-cluster --break-system-packages`
+- `pip3 install setuptools --break-system-packages`
+
+Store data in cluster such python script
+```
+from rediscluster import RedisCluster
+
+startup_nodes = [
+    {'host': '127.0.0.1', 'port': '8000'},
+    {'host': '127.0.0.1', 'port': '8001'},
+    {'host': '127.0.0.1', 'port': '8002'},
+]
+
+redis_cluster_client = RedisCluster(startup_nodes=startup_nodes, decode_responses=True)
+
+str_data = open('./JEOPARDY_QUESTIONS1.json', 'r').read()
+
+redis_cluster_client.set('key1', str_data)
+
+import numpy as np
+
+floats = np.linspace(-5000, 5000, 500000)
+floats_data = {str(f) : f for f in floats}
+redis_cluster_client.zadd('key2', floats_data)
+```
+
+Connect to some nodes and check keys they store - `redis-cli -p 8000 -c` - `keys "*"`
+
+![plot](./screenshots/source9.png)
+
+Now we change in configuration file `cluster-node-timeout`  to __5__ms for two nodes and restart the cluster
+Then we insert a lot of data (nearly 50kk floats) and monitor the servers ouput
+
+As we see on screenshots we got cluster Fail because of long reaceiving heatbeat from cluster `cc775294435d6f15389a7d8919872354446a37b3`
+Then we see that the node became reachable again and the state was successfully recovered to __OK__
+
+![plot](./screenshots/source10.png)
+![plot](./screenshots/source11.png)
+
+#### Conclusion
+
+So we understand that in using redis-cluster across three nodes, the configuration of timeouts plays a crucial role in ensuring the system's reliability, performance, and overall fault tolerance.
